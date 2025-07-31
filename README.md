@@ -24,6 +24,10 @@ Metis is an advanced AI agent platform with an intelligent MCP (Model Context Pr
 
 ## 🚀 Quick Start
 
+**Choose Your Setup Method:**
+- **Shell Scripts** (recommended for development): Follow steps below
+- **Docker** (recommended for production): Jump to [Docker Setup](#-docker-setup-alternative-to-shell-scripts) section
+
 ### Step 1: Configure Your MCP Servers (Most Important!)
 
 Add the MCP servers you want to `server/mcp-registry.json`. You can add up to **1,000+ servers**:
@@ -62,17 +66,20 @@ const MAX_ACTIVE_SERVERS = 3; // Adjust based on your needs
 ```
 **NOTE:** All active MCP servers are in `server/config.json`, you can manually remove/add servers to the active queue of MCP servers here
 
-### Step 3: Set Up Environment Variables in Two .env Files
+### Step 3: Set Up Environment Variables
 
-**Server folder** (`server/.env`):
+**Single shared .env file** (project root):
 ```bash
+# Copy the template and configure
+cp .env.example .env
+
+# Edit .env with your configuration
 OPENAI_API_KEY=your_openai_api_key_here
+MAX_ACTIVE_SERVERS=3
+NODE_ENV=development
 ```
 
-**Backend folder** (`client/backend/.env`):
-```bash
-OPENAI_API_KEY=your_openai_api_key_here
-```
+**Note:** The Docker setup uses a single shared `.env` file in the project root instead of separate `.env` files in each component directory. This simplifies configuration management and ensures consistency across all services.
 
 ### Step 4: Authentication & Indexing
 
@@ -183,9 +190,27 @@ const MAX_ACTIVE_SERVERS = 5; // Increase for more concurrent servers, but there
 
 ### **Environment Variables**
 
-**Required in both `/server/.env` and `/client/backend/.env`**:
+**Shared configuration in root `.env` file** (used by all services):
 ```bash
+# Required
 OPENAI_API_KEY=your_openai_api_key_here
+
+# Optional (with defaults)
+MAX_ACTIVE_SERVERS=3
+NODE_ENV=development
+SERVER_PORT=9999
+BACKEND_PORT=8000
+FRONTEND_PORT=3000
+```
+
+**Docker-specific variables:**
+```bash
+# Service URLs for container networking
+SERVER_URL=http://server:9999
+NEXT_PUBLIC_API_URL=http://localhost:8000
+
+# Docker network and container names
+DOCKER_NETWORK=metis-network
 ```
 
 ### **Prerequisites**
@@ -193,11 +218,349 @@ OPENAI_API_KEY=your_openai_api_key_here
 - **Python** 3.8+
 - **OpenAI API Key** (required for server selection and embeddings)
 
+## 🐳 Docker Setup (Alternative to Shell Scripts)
+
+Docker provides a containerized environment that ensures consistent deployment across different systems. This section provides comprehensive Docker setup instructions as an alternative to the shell scripts.
+
+### Prerequisites
+
+- **Docker** 20.10+ and **Docker Compose** 2.0+
+- **OpenAI API Key** (required for server selection and embeddings)
+
+### Step 1: Environment Configuration
+
+Create a `.env` file in the project root using the provided template:
+
+```bash
+# Copy the environment template
+cp .env.example .env
+
+# Edit the .env file with your configuration
+# At minimum, set your OpenAI API key:
+OPENAI_API_KEY=sk-your_openai_api_key_here
+```
+
+**Key Environment Variables:**
+
+```bash
+# Required Configuration
+OPENAI_API_KEY=sk-your_openai_api_key_here    # Required for AI-powered server selection
+MAX_ACTIVE_SERVERS=3                          # Number of MCP servers to keep active
+NODE_ENV=development                          # or 'production'
+
+# Service Ports (default values)
+SERVER_PORT=9999                              # MCP Router port
+BACKEND_PORT=8000                             # FastAPI backend port  
+FRONTEND_PORT=3000                            # Next.js frontend port
+
+# Service URLs (for Docker networking)
+SERVER_URL=http://server:9999                 # Backend -> Server connection
+NEXT_PUBLIC_API_URL=http://localhost:8000     # Frontend -> Backend connection
+```
+
+### Step 2: Configure MCP Servers
+
+Add your desired MCP servers to `server/mcp-registry.json`:
+
+```json
+{
+  "mcpServers": {
+    "notion": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.notion.com/sse"]
+    },
+    "github": {
+      "command": "npx", 
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_your_token"
+      }
+    }
+  }
+}
+```
+
+### Step 3: Production Deployment
+
+For production deployment with optimized builds:
+
+```bash
+# Build and start all services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
+```
+
+**Production Features:**
+- Multi-stage optimized Docker builds
+- Automatic service restart policies
+- Health checks and monitoring
+- Persistent data volumes
+- Production-ready configurations
+
+### Step 4: Development Workflow
+
+For development with hot reloading and debugging:
+
+```bash
+# Start development environment
+docker-compose -f docker-compose.dev.yml up -d
+
+# View logs for specific service
+docker-compose -f docker-compose.dev.yml logs -f server
+docker-compose -f docker-compose.dev.yml logs -f backend
+docker-compose -f docker-compose.dev.yml logs -f frontend
+
+# Stop development environment
+docker-compose -f docker-compose.dev.yml down
+```
+
+**Development Features:**
+- Source code hot reloading for all services
+- Debug ports exposed (Node.js: 9229, Python: 5678)
+- Development-optimized builds
+- Enhanced logging and debugging tools
+
+### Step 5: Authentication & Server Indexing
+
+After starting the containers, you need to authenticate and index your MCP servers:
+
+```bash
+# Option 1: Run authentication inside the server container
+docker-compose exec server npm run setup-registry
+
+# Option 2: Use the setup script (if available)
+./setup.sh
+```
+
+This will:
+- Authenticate with all configured MCP servers
+- Store credentials in the `~/.mcp-auth` volume
+- Generate AI embeddings for intelligent server selection
+- Create the active server configuration
+
+### Volume Management
+
+Docker uses several volume types for data persistence:
+
+**Bind Mounts (Direct file access):**
+```yaml
+volumes:
+  - ./server/mcp-registry.json:/app/mcp-registry.json    # Server registry
+  - ./server/config.json:/app/config.json                # Active server cache
+  - ./server/generated:/app/generated                    # AI embeddings
+  - ~/.mcp-auth:/root/.mcp-auth                          # Authentication data
+```
+
+**Named Volumes (Docker-managed):**
+```yaml
+volumes:
+  - metis-server-node-modules:/app/node_modules          # Node.js dependencies
+  - metis-frontend-node-modules:/app/node_modules        # Frontend dependencies
+```
+
+### Service Architecture
+
+The Docker setup creates a multi-container architecture:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Docker Host                              │
+│                                                                 │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐ │
+│  │   Frontend      │    │   Backend       │    │  MCP Server     │ │
+│  │   (Next.js)     │◄──►│   (FastAPI)     │◄──►│   (Node.js)     │ │
+│  │   Port: 3000    │    │   Port: 8000    │    │   Port: 9999    │ │
+│  │   nginx:alpine  │    │   python:3.11   │    │   node:18-alpine│ │
+│  └─────────────────┘    └─────────────────┘    └─────────────────┘ │
+│           │                       │                       │        │
+│  ┌─────────────────────────────────────────────────────────────────┐ │
+│  │                    Docker Network: metis-network               │ │
+│  └─────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Health Checks & Monitoring
+
+All services include health checks for monitoring:
+
+```bash
+# Check service health
+docker-compose ps
+
+# View health check logs
+docker inspect metis-server --format='{{.State.Health.Status}}'
+docker inspect metis-backend --format='{{.State.Health.Status}}'
+docker inspect metis-frontend --format='{{.State.Health.Status}}'
+```
+
+**Health Check Endpoints:**
+- Server: `http://localhost:9999/health`
+- Backend: `http://localhost:8000/health`
+- Frontend: `http://localhost:3000/api/health`
+
+### Docker Commands Reference
+
+**Basic Operations:**
+```bash
+# Build images
+docker-compose build
+
+# Start services (detached)
+docker-compose up -d
+
+# View logs
+docker-compose logs -f [service_name]
+
+# Stop services
+docker-compose down
+
+# Remove volumes (caution: deletes data)
+docker-compose down -v
+```
+
+**Development Operations:**
+```bash
+# Start development environment
+docker-compose -f docker-compose.dev.yml up -d
+
+# Rebuild specific service
+docker-compose -f docker-compose.dev.yml build server
+
+# Execute commands in running container
+docker-compose exec server npm run build
+docker-compose exec backend python -c "import app; print('Backend loaded')"
+```
+
+**Maintenance Operations:**
+```bash
+# View container resource usage
+docker stats
+
+# Clean up unused images and containers
+docker system prune
+
+# View volume usage
+docker volume ls
+docker volume inspect metis-server-node-modules
+```
+
+### Troubleshooting Docker Issues
+
+**Common Issues and Solutions:**
+
+1. **Port Conflicts**
+   ```bash
+   # Check what's using the ports
+   lsof -i :3000 -i :8000 -i :9999
+   
+   # Change ports in .env file
+   FRONTEND_PORT=3001
+   BACKEND_PORT=8001
+   SERVER_PORT=9998
+   ```
+
+2. **Permission Issues with Volumes**
+   ```bash
+   # Fix ownership of bind-mounted directories
+   sudo chown -R $USER:$USER ./server/generated
+   sudo chown -R $USER:$USER ~/.mcp-auth
+   ```
+
+3. **Container Won't Start**
+   ```bash
+   # Check container logs
+   docker-compose logs server
+   
+   # Check if environment variables are loaded
+   docker-compose exec server env | grep OPENAI_API_KEY
+   ```
+
+4. **Authentication Failures**
+   ```bash
+   # Clear authentication data and re-authenticate
+   docker-compose down
+   rm -rf ~/.mcp-auth
+   docker-compose up -d
+   docker-compose exec server npm run setup-registry
+   ```
+
+5. **Build Failures**
+   ```bash
+   # Clean build cache and rebuild
+   docker-compose build --no-cache
+   
+   # Remove all containers and volumes
+   docker-compose down -v
+   docker system prune -a
+   ```
+
+6. **Service Communication Issues**
+   ```bash
+   # Test inter-service connectivity
+   docker-compose exec frontend curl http://backend:8000/health
+   docker-compose exec backend curl http://server:9999/health
+   
+   # Check network configuration
+   docker network inspect metis-network
+   ```
+
+7. **Hot Reloading Not Working (Development)**
+   ```bash
+   # Ensure proper volume mounting
+   docker-compose -f docker-compose.dev.yml down
+   docker-compose -f docker-compose.dev.yml up -d
+   
+   # Check if source code is properly mounted
+   docker-compose exec server ls -la /app
+   ```
+
+8. **Memory/Performance Issues**
+   ```bash
+   # Monitor resource usage
+   docker stats
+   
+   # Reduce MAX_ACTIVE_SERVERS in .env
+   MAX_ACTIVE_SERVERS=2
+   
+   # Restart with new configuration
+   docker-compose restart
+   ```
+
+**Log Analysis:**
+```bash
+# View all service logs
+docker-compose logs
+
+# Follow logs for specific service
+docker-compose logs -f server
+
+# View last 100 lines
+docker-compose logs --tail=100 backend
+
+# Filter logs by timestamp
+docker-compose logs --since="2024-01-01T00:00:00Z"
+```
+
+**Environment Debugging:**
+```bash
+# Check environment variables in container
+docker-compose exec server printenv | grep -E "(OPENAI|NODE_ENV|SERVER_PORT)"
+docker-compose exec backend printenv | grep -E "(OPENAI|PYTHON_ENV|BACKEND_PORT)"
+
+# Verify .env file is loaded
+docker-compose config
+```
+
 ## 🛠️ Development
 
 ### Manual Development Setup
 
-If you prefer to run services individually:
+If you prefer to run services individually without Docker:
 
 ```bash
 # Terminal 1: MCP Server
@@ -252,29 +615,39 @@ metis-router/
 │   │   └── setup-registry.ts # 📦 Combined indexing & embedding
 │   ├── mcp-registry.json     # 📋 ALL servers (up to 1000+)
 │   ├── config.json          # ⚡ Currently active servers (cache)
-│   ├── .env                 # 🔑 OPENAI_API_KEY
+│   ├── Dockerfile           # 🐳 Server container configuration
+│   ├── .dockerignore        # 🚫 Docker build exclusions
 │   └── generated/           # 🤖 AI embeddings & summaries
 │
 ├── client/
 │   ├── backend/             # 🤖 AI Agent Backend
 │   │   ├── app.py          # 🎯 Main FastAPI application
-│   │   ├── .env            # 🔑 OPENAI_API_KEY
-│   │   └── requirements.txt # 🐍 Python dependencies
+│   │   ├── requirements.txt # 🐍 Python dependencies
+│   │   ├── Dockerfile      # 🐳 Backend container configuration
+│   │   └── .dockerignore   # 🚫 Docker build exclusions
 │   │
 │   └── frontend/           # 🖥️ Chat Interface
 │       ├── app/            # ⚛️ Next.js application
-│       └── src/components/ # 🎨 UI components
+│       ├── components/     # 🎨 UI components
+│       ├── Dockerfile      # 🐳 Frontend container configuration
+│       └── .dockerignore   # 🚫 Docker build exclusions
 │
-├── ~/.mcp-auth/            # 🔐 Authentication credentials
+├── ~/.mcp-auth/            # 🔐 Authentication credentials (volume)
+├── .env                    # 🔑 Shared environment configuration
+├── .env.example           # 📝 Environment template
+├── docker-compose.yml     # 🐳 Production container orchestration
+├── docker-compose.dev.yml # 🛠️ Development container orchestration
 ├── setup.sh               # 🚀 Setup + Auth + Indexing
 ├── start.sh               # ▶️  Start all services
 └── README.md              # 📖 This file
 
 Key Files:
-🔧 MAX_ACTIVE_SERVERS: server/src/add-new-mcp.ts
+🔧 MAX_ACTIVE_SERVERS: server/src/add-new-mcp.ts or .env
 📋 Server Registry: server/mcp-registry.json  
 ⚡ Active Cache: server/config.json
 🔐 Credentials: ~/.mcp-auth/
+🐳 Docker Config: docker-compose.yml, docker-compose.dev.yml
+🔑 Environment: .env (shared by all services)
 ```
 
 ## 🚀 Key Features
@@ -375,8 +748,9 @@ Check `server/config.json` to see which servers are currently loaded in the cach
 
 ## 🐛 Troubleshooting
 
-### **Authentication Issues**
+### **Shell Script Setup Issues**
 
+**Authentication Issues:**
 ```bash
 # If servers fail to authenticate
 rm -rf ~/.mcp-auth
@@ -386,8 +760,7 @@ rm -rf ~/.mcp-auth
 ls -la ~/.mcp-auth/
 ```
 
-### **Router Cache Issues**
-
+**Router Cache Issues:**
 ```bash
 # Check currently active servers
 cat server/config.json
@@ -396,19 +769,69 @@ cat server/config.json
 cd server && npm run dev:http
 ```
 
-### **Common Issues**
-
+**Common Issues:**
 1. **Authentication Failures**: Run `./setup.sh` after adding new servers
-2. **Server Selection Problems**: Ensure OpenAI API key is set in both `.env` files
-3. **Cache Overflow**: Reduce `MAX_ACTIVE_SERVERS` in `server/src/add-new-mcp.ts`
+2. **Server Selection Problems**: Ensure OpenAI API key is set in `.env` file
+3. **Cache Overflow**: Reduce `MAX_ACTIVE_SERVERS` in `.env` or `server/src/add-new-mcp.ts`
 4. **Port Conflicts**: Ensure ports 3000, 8000, and 9999 are available
 
-### **Logs & Debugging**
+### **Docker Setup Issues**
 
-- **Router Logs**: Check server terminal for server loading/unloading
-- **Authentication Logs**: Watch for auth failures during `./setup.sh`
+**Container Issues:**
+```bash
+# Check container status
+docker-compose ps
+
+# View container logs
+docker-compose logs -f [service_name]
+
+# Restart specific service
+docker-compose restart [service_name]
+```
+
+**Environment Issues:**
+```bash
+# Verify environment variables are loaded
+docker-compose exec server printenv | grep OPENAI_API_KEY
+
+# Check shared .env file configuration
+docker-compose config
+```
+
+**Volume and Data Issues:**
+```bash
+# Check volume mounts
+docker-compose exec server ls -la /app
+docker inspect metis-server | grep -A 10 "Mounts"
+
+# Fix permission issues
+sudo chown -R $USER:$USER ./server/generated
+sudo chown -R $USER:$USER ~/.mcp-auth
+```
+
+**Network Issues:**
+```bash
+# Test inter-service connectivity
+docker-compose exec frontend curl http://backend:8000/health
+docker-compose exec backend curl http://server:9999/health
+
+# Check Docker network
+docker network inspect metis-network
+```
+
+### **General Debugging**
+
+**Logs & Monitoring:**
+- **Shell Scripts**: Check individual terminal outputs
+- **Docker**: Use `docker-compose logs -f` for real-time logs
+- **Authentication**: Watch for auth failures during setup
 - **AI Selection**: Backend logs show which servers/tools are selected
 - **Cache Status**: Monitor `config.json` for active server changes
+
+**Performance Issues:**
+- **Memory Usage**: Monitor with `docker stats` (Docker) or system monitor
+- **Cache Size**: Reduce `MAX_ACTIVE_SERVERS` in `.env` file
+- **Build Performance**: Use `docker-compose build --parallel` for faster builds
 
 ## 📄 License
 

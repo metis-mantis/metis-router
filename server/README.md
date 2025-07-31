@@ -1,257 +1,661 @@
-# MCP Proxy Server
+# MCP Server - Docker Setup Guide
 
-An MCP proxy server that aggregates and serves multiple MCP resource servers through a single interface. This server acts as a central hub that can:
+An intelligent MCP (Model Context Protocol) router that aggregates and serves multiple MCP resource servers through a single interface. This server acts as a central hub with AI-powered server selection and LRU caching for optimal performance.
 
-- Connect to and manage multiple MCP resource servers
-- Expose their combined capabilities through a unified interface
-- Handle routing of requests to appropriate backend servers
-- Aggregate responses from multiple sources
-- **NEW**: Automatically add MCP servers from the modelcontextprotocol/servers repository
-- **NEW**: Manage authentication credentials for MCP servers
+## Quick Start with Docker
 
-## Features
+### Prerequisites
 
-### Resource Management
-- Discover and connect to multiple MCP resource servers
-- Aggregate resources from all connected servers
-- Maintain consistent URI schemes across servers
-- Handle resource routing and resolution
+- Docker and Docker Compose installed
+- OpenAI API key
+- Available ports: 9999 (server)
 
-### Tool Aggregation
-- Expose tools from all connected servers
-- Route tool calls to appropriate backend servers
-- Maintain tool state and handle responses
-
-### Prompt Handling
-- Aggregate prompts from all connected servers
-- Route prompt requests to appropriate backends
-- Handle multi-server prompt responses
-
-### MCP Server Management (NEW)
-- **Add MCP servers by name**: Automatically add any server from the modelcontextprotocol/servers repository
-- **Authentication management**: Securely store and manage API keys and credentials
-- **Server discovery**: List all available MCP servers with descriptions
-- **Server information**: Get detailed info about servers including auth requirements
-- **Auth status checking**: Monitor which servers have proper authentication configured
-
-## Available MCP Management Tools
-
-The proxy server includes a single agent-facing tool and a comprehensive CLI for management:
-
-### Agent Tool: `add_new_mcp`
-Add a new MCP server by name from the modelcontextprotocol/servers repository.
-```
-Parameters:
-- name: Name of the MCP server (e.g., "github", "google-maps", "postgresql")
-```
-
-### CLI Management Tool: `mcp-manager`
-A comprehensive command-line interface for managing MCP servers:
+### Basic Docker Commands
 
 ```bash
-# List all available MCP servers
-npm run mcp-manager list
+# Build the server image
+docker build -t metis-server ./server
 
-# Get detailed information about a server
-npm run mcp-manager info github
+# Run standalone container
+docker run -d \
+  --name metis-server \
+  -p 9999:9999 \
+  -e OPENAI_API_KEY=your_api_key_here \
+  -v $(pwd)/server/mcp-registry.json:/app/mcp-registry.json \
+  -v $(pwd)/server/config.json:/app/config.json \
+  -v $(pwd)/server/generated:/app/generated \
+  -v ~/.mcp-auth:/root/.mcp-auth \
+  metis-server
 
-# Add a new MCP server
-npm run mcp-manager add github
-
-# Store authentication credentials
-npm run mcp-manager store-auth "GitHub" GITHUB_PERSONAL_ACCESS_TOKEN=ghp_your_token_here
-
-# Check authentication status
-npm run mcp-manager auth-status
+# Check container health
+docker ps
+docker logs metis-server
 ```
 
-## Supported MCP Servers
+### Using Docker Compose (Recommended)
 
-The system supports all reference servers from the modelcontextprotocol/servers repository, including:
-
-### Reference Servers (TypeScript)
-- **AWS KB Retrieval** - Retrieval from AWS Knowledge Base using Bedrock Agent Runtime
-- **Brave Search** - Web and local search using Brave's Search API
-- **EverArt** - AI image generation using various models
-- **Everything** - Reference / test server with prompts, resources, and tools
-- **Fetch** - Web content fetching and conversion for efficient LLM usage
-- **Filesystem** - Secure file operations with configurable access controls
-- **GitHub** - Repository management, file operations, and GitHub API integration
-- **GitLab** - GitLab API, enabling project management
-- **Google Drive** - File access and search capabilities for Google Drive
-- **Google Maps** - Location services, directions, and place details
-- **Memory** - Knowledge graph-based persistent memory system
-- **PostgreSQL** - Read-only database access with schema inspection
-- **Puppeteer** - Browser automation and web scraping
-- **Redis** - Interact with Redis key-value stores
-- **Sentry** - Retrieving and analyzing issues from Sentry.io
-- **Sequential Thinking** - Dynamic and reflective problem-solving through thought sequences
-- **Slack** - Channel management and messaging capabilities
-- **SQLite** - Database interaction and business intelligence capabilities
-- **Time** - Time and timezone conversion capabilities
-
-### Reference Servers (Python)
-- **Git** - Tools to read, search, and manipulate Git repositories
-
-## Authentication Management
-
-Many MCP servers require authentication credentials (API keys, tokens, etc.). The system handles this automatically:
-
-1. **Automatic Detection**: When adding a server that requires auth, you'll be prompted with the required credentials
-2. **Secure Storage**: Credentials are stored in `mcp-auth.json` (keep this file secure!)
-3. **Environment Variables**: Auth data is automatically injected as environment variables when starting servers
-
-### Example Authentication Workflow
-
-1. Try to add a server that requires auth (via agent or CLI):
 ```bash
-# Via agent tool
-add_new_mcp("github")
+# Start all services (server, backend, frontend)
+docker-compose up -d
 
-# Via CLI
-npm run mcp-manager add github
+# Start only the server
+docker-compose up -d server
+
+# View logs
+docker-compose logs -f server
+
+# Stop services
+docker-compose down
 ```
 
-2. Store the required credentials (via CLI):
+## Docker Architecture
+
+### Multi-Stage Dockerfile Structure
+
+The server uses a 3-stage Docker build for optimal performance:
+
+#### Stage 1: Dependencies (`deps`)
+- **Base**: `node:18-alpine`
+- **Purpose**: Install and cache production dependencies
+- **Optimization**: Separate layer for package.json changes
+- **Security**: Includes `dumb-init` for proper signal handling
+
+#### Stage 2: Builder (`builder`)
+- **Base**: `node:18-alpine`
+- **Purpose**: TypeScript compilation and build process
+- **Process**: Installs all dependencies (including dev) and runs `npm run build`
+- **Output**: Compiled JavaScript in `/app/build` directory
+
+#### Stage 3: Runtime (`runtime`)
+- **Base**: `node:18-alpine`
+- **Purpose**: Minimal production runtime environment
+- **Security**: Non-root user (`mcp:nodejs`)
+- **Health**: Built-in health checks
+- **Size**: ~150MB (optimized)
+
+### Build Process Flow
+
+```mermaid
+graph TD
+    A[Source Code] --> B[Dependencies Stage]
+    B --> C[Builder Stage]
+    C --> D[Runtime Stage]
+    B --> E[Production node_modules]
+    C --> F[Compiled TypeScript]
+    E --> D
+    F --> D
+    D --> G[Final Image ~150MB]
+```
+
+## Environment Configuration
+
+### Shared Environment Variables
+
+The server reads from the root `.env` file (not `server/.env`):
+
 ```bash
-npm run mcp-manager store-auth "GitHub" GITHUB_PERSONAL_ACCESS_TOKEN=ghp_your_token_here
+# Required
+OPENAI_API_KEY=sk-your_openai_api_key_here
+
+# Server Configuration
+MAX_ACTIVE_SERVERS=3
+SERVER_PORT=9999
+NODE_ENV=production
+
+# Optional
+LOG_LEVEL=info
+CACHE_SIZE=100
+REQUEST_TIMEOUT=30
 ```
 
-3. Add the server (now it will work):
+### Docker Environment Injection
+
+Environment variables are automatically injected into the container:
+
+```yaml
+# docker-compose.yml
+services:
+  server:
+    env_file:
+      - .env  # Root environment file
+    environment:
+      - NODE_ENV=production
+      - PORT=9999
+```
+
+## Volume Mounting Strategy
+
+### Persistent Data Volumes
+
+The server requires several bind mounts for persistent data:
+
+```yaml
+volumes:
+  # MCP Server Registry (all available servers)
+  - ./server/mcp-registry.json:/app/mcp-registry.json
+  
+  # Active Server Configuration (LRU cache)
+  - ./server/config.json:/app/config.json
+  
+  # AI-Generated Data (embeddings, summaries)
+  - ./server/generated:/app/generated
+  
+  # Authentication Credentials
+  - ~/.mcp-auth:/root/.mcp-auth
+```
+
+### Volume Purposes
+
+| Volume | Purpose | Persistence | Size |
+|--------|---------|-------------|------|
+| `mcp-registry.json` | Master server registry (1000+ servers) | Required | ~500KB |
+| `config.json` | Active server cache (LRU) | Required | ~50KB |
+| `generated/` | AI embeddings and summaries | Recommended | ~10MB |
+| `~/.mcp-auth` | Server authentication credentials | Required | ~1KB |
+
+### Development Volume Mounts
+
+For development with hot reloading:
+
+```yaml
+# docker-compose.dev.yml
+volumes:
+  - ./server:/app
+  - /app/node_modules  # Anonymous volume for node_modules
+```
+
+## Health Checks and Monitoring
+
+### Built-in Health Check
+
+The container includes a comprehensive health check:
+
+```dockerfile
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:9999/health || exit 1
+```
+
+### Health Check Endpoint
+
+The server exposes a `/health` endpoint:
+
 ```bash
-# Via agent tool
-add_new_mcp("github")
+# Check health manually
+curl http://localhost:9999/health
 
-# Via CLI
-npm run mcp-manager add github
-```
-
-### Authentication File
-
-Create a `mcp-auth.json` file to store credentials (see `mcp-auth.example.json` for format):
-
-```json
+# Expected response
 {
-  "GitHub": {
-    "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_your_github_token_here"
-  },
-  "Google Maps": {
-    "GOOGLE_MAPS_API_KEY": "your_google_maps_api_key_here"
+  "status": "healthy",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "uptime": 3600,
+  "activeServers": 3,
+  "maxServers": 3,
+  "memoryUsage": {
+    "rss": 45678912,
+    "heapUsed": 23456789
   }
 }
 ```
 
-## Configuration
-
-The server requires a JSON configuration file that specifies the MCP servers to connect to. Copy the example config and modify it for your needs:
+### Monitoring Commands
 
 ```bash
-cp config.example.json config.json
+# Container health status
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+# Resource usage
+docker stats metis-server
+
+# Health check logs
+docker inspect metis-server | jq '.[0].State.Health'
+
+# Application logs
+docker logs -f metis-server --tail 100
 ```
 
-Example config structure:
-```json
-{
-  "servers": [
-    {
-      "name": "Server 1",
-      "transport": {
-        "command": "/path/to/server1/build/index.js"
-      }
-    },
-    {
-      "name": "Server 2",
-      "transport": {
-        "command": "server2-command",
-        "args": ["--option1", "value1"],
-        "env": ["SECRET_API_KEY"]
-      }
-    },
-    {
-      "name": "Example Server 3",
-      "transport": {
-        "type": "sse",
-        "url": "http://localhost:8080/sse"
-      }
-    }
-  ]
-}
+## Build Optimization
+
+### Layer Caching Strategy
+
+The Dockerfile is optimized for Docker layer caching:
+
+1. **Package files first**: `COPY package*.json ./`
+2. **Dependencies installation**: `RUN npm ci`
+3. **Source code last**: `COPY . .`
+
+This ensures dependency layers are cached when only source code changes.
+
+### Build Context Optimization
+
+The `.dockerignore` file excludes unnecessary files:
+
+```
+node_modules
+build
+*.log
+.env*
+.git
+.DS_Store
+coverage
+*.test.ts
 ```
 
-The config file must be provided when running the server:
+### Build Performance Tips
+
 ```bash
-MCP_CONFIG_PATH=./config.json mcp-proxy-server
+# Use BuildKit for faster builds
+DOCKER_BUILDKIT=1 docker build -t metis-server ./server
+
+# Build with cache from registry
+docker build --cache-from metis-server:latest -t metis-server ./server
+
+# Multi-platform builds
+docker buildx build --platform linux/amd64,linux/arm64 -t metis-server ./server
 ```
 
-## Development
+## Development Workflow
 
-Install dependencies:
+### Development Mode
+
 ```bash
-npm install
+# Start with hot reloading
+docker-compose -f docker-compose.dev.yml up server
+
+# Or run development server directly
+docker run -it --rm \
+  -p 9999:9999 \
+  -v $(pwd)/server:/app \
+  -v /app/node_modules \
+  -e NODE_ENV=development \
+  metis-server npm run dev:http
 ```
 
-Build the server:
+### Testing in Container
+
 ```bash
-npm run build
+# Run tests
+docker-compose exec server npm test
+
+# Run specific test file
+docker-compose exec server npm test -- --match="*proxy*"
+
+# Interactive shell
+docker-compose exec server sh
 ```
-
-For development with auto-rebuild:
-```bash
-npm run watch
-```
-
-For development with continuous run:
-```bash
-# Stdio
-npm run dev
-# SSE
-npm run dev:sse
-```
-
-## Installation
-
-To use with Claude Desktop, add the server config:
-
-On MacOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-On Windows: `%APPDATA%/Claude/claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "mcp-proxy": {
-      "command": "/path/to/mcp-proxy-server/build/index.js",
-      "env": {
-        "MCP_CONFIG_PATH": "/absolute/path/to/your/config.json",
-        "KEEP_SERVER_OPEN": "1"
-      }
-    }
-  }
-}
-```
-
-- `KEEP_SERVER_OPEN` will keep the SSE running even if a client disconnects. Useful when multiple clients connects to the MCP proxy.
 
 ### Debugging
 
-Since MCP servers communicate over stdio, debugging can be challenging. We recommend using the [MCP Inspector](https://github.com/modelcontextprotocol/inspector), which is available as a package script:
-
 ```bash
-npm run inspector
+# Enable debug logging
+docker-compose up server -e LOG_LEVEL=debug
+
+# Use MCP Inspector
+docker-compose exec server npm run inspector
+
+# Attach debugger
+docker run -it --rm \
+  -p 9999:9999 \
+  -p 9229:9229 \
+  -v $(pwd)/server:/app \
+  metis-server node --inspect=0.0.0.0:9229 build/http-streaming.js
 ```
 
-The Inspector will provide a URL to access debugging tools in your browser.
+## Production Deployment
 
-## Security Notes
+### Production Build
 
-- Keep your `mcp-auth.json` file secure and never commit it to version control
-- Add `mcp-auth.json` to your `.gitignore` file
-- Consider using environment variables for production deployments
-- The system will eventually support SQL database storage for credentials (currently uses JSON)
+```bash
+# Build production image
+docker build --target runtime -t metis-server:prod ./server
 
-## Future Enhancements
+# Run production container
+docker run -d \
+  --name metis-server-prod \
+  --restart unless-stopped \
+  -p 9999:9999 \
+  -e NODE_ENV=production \
+  -e OPENAI_API_KEY=your_api_key \
+  -v $(pwd)/server/mcp-registry.json:/app/mcp-registry.json \
+  -v $(pwd)/server/config.json:/app/config.json \
+  -v $(pwd)/server/generated:/app/generated \
+  -v ~/.mcp-auth:/root/.mcp-auth \
+  metis-server:prod
+```
 
-- SQL database storage for authentication credentials
-- Support for additional MCP server repositories
-- Web UI for managing MCP servers
-- Encrypted credential storage
-- Role-based access control for MCP servers
+### Production Environment Variables
+
+```bash
+# Production .env settings
+NODE_ENV=production
+LOG_LEVEL=warn
+LOG_FORMAT=json
+DEBUG=false
+MAX_ACTIVE_SERVERS=5
+CACHE_SIZE=200
+```
+
+### Resource Limits
+
+```yaml
+# docker-compose.prod.yml
+services:
+  server:
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+```
+
+## Troubleshooting
+
+### Common Issues
+
+#### 1. Container Won't Start
+
+```bash
+# Check logs
+docker logs metis-server
+
+# Common causes:
+# - Missing OPENAI_API_KEY
+# - Port 9999 already in use
+# - Invalid volume mounts
+```
+
+#### 2. Health Check Failing
+
+```bash
+# Check health endpoint manually
+docker exec metis-server curl -f http://localhost:9999/health
+
+# Common causes:
+# - Server not fully started (wait 30s)
+# - Missing curl in container (should be installed)
+# - Application crashed (check logs)
+```
+
+#### 3. Volume Mount Issues
+
+```bash
+# Check volume mounts
+docker inspect metis-server | jq '.[0].Mounts'
+
+# Common causes:
+# - Incorrect file paths
+# - Permission issues
+# - Files don't exist on host
+```
+
+#### 4. Environment Variables Not Loading
+
+```bash
+# Check environment variables
+docker exec metis-server env | grep -E "(OPENAI|MAX_ACTIVE)"
+
+# Common causes:
+# - .env file not in project root
+# - Incorrect env_file path in docker-compose.yml
+# - Variables not exported in shell
+```
+
+### Performance Issues
+
+#### High Memory Usage
+
+```bash
+# Monitor memory usage
+docker stats metis-server
+
+# Solutions:
+# - Reduce MAX_ACTIVE_SERVERS
+# - Reduce CACHE_SIZE
+# - Add memory limits
+```
+
+#### Slow Startup
+
+```bash
+# Check startup time
+docker logs metis-server | grep -i "server.*listening"
+
+# Solutions:
+# - Use smaller base image
+# - Optimize dependencies
+# - Pre-warm cache
+```
+
+### Network Issues
+
+#### Can't Connect to Server
+
+```bash
+# Check port binding
+docker port metis-server
+
+# Check network connectivity
+docker exec metis-server netstat -tlnp
+
+# Test from host
+curl http://localhost:9999/health
+```
+
+#### Service Discovery Issues
+
+```bash
+# Check Docker network
+docker network ls
+docker network inspect metis-network
+
+# Test inter-service communication
+docker exec metis-backend curl http://server:9999/health
+```
+
+### Debugging Commands
+
+```bash
+# Container information
+docker inspect metis-server
+
+# Process list
+docker exec metis-server ps aux
+
+# File system
+docker exec metis-server ls -la /app
+
+# Network interfaces
+docker exec metis-server ip addr show
+
+# Environment variables
+docker exec metis-server printenv
+
+# Disk usage
+docker exec metis-server df -h
+```
+
+## Security Considerations
+
+### Container Security
+
+- **Non-root user**: Container runs as `mcp:nodejs` (UID 1001)
+- **Minimal base image**: Alpine Linux for reduced attack surface
+- **Signal handling**: `dumb-init` for proper process management
+- **Health checks**: Automatic restart on failure
+
+### Secrets Management
+
+```bash
+# Use Docker secrets (Swarm mode)
+echo "your_api_key" | docker secret create openai_api_key -
+
+# Use environment file
+docker run --env-file .env.prod metis-server
+
+# Use external secret management
+docker run -e OPENAI_API_KEY="$(vault kv get -field=key secret/openai)" metis-server
+```
+
+### Network Security
+
+```yaml
+# Restrict network access
+services:
+  server:
+    networks:
+      - metis-internal
+    ports:
+      - "127.0.0.1:9999:9999"  # Bind to localhost only
+```
+
+## Advanced Configuration
+
+### Custom Build Arguments
+
+```dockerfile
+# Build with custom Node.js version
+docker build --build-arg NODE_VERSION=20-alpine -t metis-server ./server
+```
+
+### Multi-Architecture Builds
+
+```bash
+# Build for multiple architectures
+docker buildx create --use
+docker buildx build --platform linux/amd64,linux/arm64 -t metis-server ./server --push
+```
+
+### Container Registry
+
+```bash
+# Tag for registry
+docker tag metis-server your-registry.com/metis-server:latest
+
+# Push to registry
+docker push your-registry.com/metis-server:latest
+
+# Pull and run
+docker run -d your-registry.com/metis-server:latest
+```
+
+## Integration with Full Stack
+
+### With Backend and Frontend
+
+```bash
+# Start full stack
+docker-compose up -d
+
+# Check service connectivity
+docker-compose exec backend curl http://server:9999/health
+docker-compose exec frontend curl http://backend:8000/health
+```
+
+### Service Dependencies
+
+```yaml
+# docker-compose.yml
+services:
+  server:
+    # Server starts first
+    
+  backend:
+    depends_on:
+      server:
+        condition: service_healthy
+        
+  frontend:
+    depends_on:
+      backend:
+        condition: service_healthy
+```
+
+## Maintenance
+
+### Updates and Upgrades
+
+```bash
+# Update dependencies
+docker-compose exec server npm update
+
+# Rebuild image
+docker-compose build server
+
+# Rolling update
+docker-compose up -d --no-deps server
+```
+
+### Backup and Restore
+
+```bash
+# Backup persistent data
+tar -czf metis-backup.tar.gz \
+  server/mcp-registry.json \
+  server/config.json \
+  server/generated/ \
+  ~/.mcp-auth
+
+# Restore
+tar -xzf metis-backup.tar.gz
+```
+
+### Log Management
+
+```bash
+# Rotate logs
+docker-compose logs --no-log-prefix server > server.log
+docker-compose restart server
+
+# Configure log rotation
+# Add to docker-compose.yml:
+logging:
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+```
+
+## Performance Tuning
+
+### Memory Optimization
+
+```yaml
+# docker-compose.yml
+services:
+  server:
+    environment:
+      - NODE_OPTIONS="--max-old-space-size=512"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+```
+
+### CPU Optimization
+
+```yaml
+services:
+  server:
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+    environment:
+      - UV_THREADPOOL_SIZE=4
+```
+
+### Disk I/O Optimization
+
+```yaml
+services:
+  server:
+    volumes:
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 100M
+```
+
+This Docker setup provides a robust, scalable, and maintainable deployment for the MCP Server component with comprehensive monitoring, security, and troubleshooting capabilities.

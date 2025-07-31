@@ -1,0 +1,109 @@
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: metis-server
+    ports:
+      - "9999:9999"
+    environment:
+      - NODE_ENV=production
+      - SERVER_PORT=9999
+    env_file:
+      - .env
+    volumes:
+      # Bind mounts for persistent data
+      - ./server/mcp-registry.json:/app/mcp-registry.json
+      - ./server/config.json:/app/config.json
+      - ./server/generated:/app/generated
+      - ~/.mcp-auth:/root/.mcp-auth
+    networks:
+      - metis-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9999/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 5s
+      retries: 3
+    depends_on: []
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    build:
+      context: ./client/backend
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: metis-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHON_ENV=production
+      - BACKEND_PORT=8000
+      - SERVER_URL=http://server:9999
+    env_file:
+      - .env
+    networks:
+      - metis-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 5s
+      retries: 3
+    depends_on:
+      server:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    build:
+      context: ./client/frontend
+      dockerfile: Dockerfile
+      target: production
+    container_name: metis-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - FRONTEND_PORT=3000
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    env_file:
+      - .env
+    networks:
+      - metis-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 5s
+      retries: 3
+    depends_on:
+      backend:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  metis-network:
+    driver: bridge
+    name: metis-network
+
+volumes:
+  # Named volumes for caching (optional, using bind mounts for data)
+  metis-server-node-modules:
+  metis-frontend-node-modules:

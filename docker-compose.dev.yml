@@ -1,0 +1,150 @@
+# Docker Compose configuration for development workflow
+# This file provides development-specific configurations with hot reloading,
+# debugging capabilities, and optimized development experience.
+
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: development  # Use development stage with dev dependencies
+    container_name: metis-server-dev
+    ports:
+      - "9999:9999"
+      - "9229:9229"  # Node.js debugging port
+    environment:
+      - NODE_ENV=development
+      - SERVER_PORT=9999
+      - DEBUG=*  # Enable debug logging
+      - NODE_OPTIONS=--inspect=0.0.0.0:9229  # Enable Node.js debugging
+    env_file:
+      - .env
+    volumes:
+      # Source code mounting for hot reloading
+      - ./server:/app
+      # Preserve node_modules to avoid conflicts
+      - metis-server-node-modules-dev:/app/node_modules
+      # Bind mounts for persistent data (same as production)
+      - ./server/mcp-registry.json:/app/mcp-registry.json
+      - ./server/config.json:/app/config.json
+      - ./server/generated:/app/generated
+      - ~/.mcp-auth:/root/.mcp-auth
+    networks:
+      - metis-network-dev
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9999/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s  # Longer start period for development
+      retries: 3
+    depends_on: []
+    # Development command is set in Dockerfile development stage
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    build:
+      context: ./client/backend
+      dockerfile: Dockerfile
+      target: development  # Use development stage with hot reloading
+    container_name: metis-backend-dev
+    ports:
+      - "8000:8000"
+      - "5678:5678"  # Python debugging port (debugpy)
+    environment:
+      - PYTHON_ENV=development
+      - BACKEND_PORT=8000
+      - SERVER_URL=http://server:9999
+      - PYTHONPATH=/app
+      - PYTHONDONTWRITEBYTECODE=1  # Prevent .pyc files
+      - PYTHONUNBUFFERED=1  # Ensure stdout/stderr are unbuffered
+      - DEBUGPY_ENABLE=1  # Enable Python debugging
+    env_file:
+      - .env
+    volumes:
+      # Source code mounting for hot reloading
+      - ./client/backend:/app
+      # Preserve virtual environment
+      - metis-backend-venv-dev:/opt/venv
+    networks:
+      - metis-network-dev
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s  # Longer start period for development
+      retries: 3
+    depends_on:
+      server:
+        condition: service_healthy
+    # Development command with hot reloading is set in Dockerfile development stage
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    build:
+      context: ./client/frontend
+      dockerfile: Dockerfile
+      target: development  # Use development stage with hot reloading
+    container_name: metis-frontend-dev
+    ports:
+      - "3000:3000"
+      - "9230:9230"  # Node.js debugging port for Next.js
+    environment:
+      - NODE_ENV=development
+      - FRONTEND_PORT=3000
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_TELEMETRY_DISABLED=1
+      - WATCHPACK_POLLING=true  # Enable polling for file changes in containers
+      - CHOKIDAR_USEPOLLING=true  # Alternative file watching method
+    env_file:
+      - .env
+    volumes:
+      # Source code mounting for hot reloading
+      - ./client/frontend:/app
+      # Preserve node_modules to avoid conflicts
+      - metis-frontend-node-modules-dev:/app/node_modules
+      # Preserve Next.js cache for faster rebuilds
+      - metis-frontend-next-cache-dev:/app/.next
+    networks:
+      - metis-network-dev
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s  # Longer start period for Next.js development server
+      retries: 3
+    depends_on:
+      backend:
+        condition: service_healthy
+    # Development command with hot reloading is set in Dockerfile development stage
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  metis-network-dev:
+    driver: bridge
+    name: metis-network-dev
+
+volumes:
+  # Development-specific named volumes for caching
+  metis-server-node-modules-dev:
+    name: metis-server-node-modules-dev
+  metis-backend-venv-dev:
+    name: metis-backend-venv-dev
+  metis-frontend-node-modules-dev:
+    name: metis-frontend-node-modules-dev
+  metis-frontend-next-cache-dev:
+    name: metis-frontend-next-cache-dev

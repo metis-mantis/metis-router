@@ -4,6 +4,11 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { ServerConfig } from './config.js';
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Load environment variables from root .env file
+dotenv.config({ path: path.resolve('../.env') });
 
 const sleep = (time: number) => new Promise<void>(resolve => setTimeout(() => resolve(), time))
 export interface ConnectedClient {

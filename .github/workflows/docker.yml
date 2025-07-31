@@ -1,0 +1,269 @@
+name: Docker Build and Publish
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - develop
+
+env:
+  REGISTRY: ghcr.io
+  REPOSITORY_OWNER_AND_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write # Required for actions/attest-build-provenance to get OIDC token
+    
+    strategy:
+      matrix:
+        service:
+          - name: server
+            context: ./server
+            dockerfile: Dockerfile
+          - name: backend
+            context: ./client/backend
+            dockerfile: Dockerfile
+          - name: frontend
+            context: ./client/frontend
+            dockerfile: Dockerfile
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetches full history, useful for git tag-based operations if needed later
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+      
+      - name: Log in to Container Registry
+        # Only log in and push to registry on push events, not pull requests
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_AND_NAME }}/${{ matrix.service.name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=Metis ${{ matrix.service.name }}
+            org.opencontainers.image.description=Metis ${{ matrix.service.name }} component
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}/blob/main/README.md
+            org.opencontainers.image.licenses=MIT
+      
+      - name: Build and push Docker image
+        id: build_image # Added ID to capture outputs, specifically the digest
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.context }}/${{ matrix.service.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }} # Only push on push events, not pull requests
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+      
+      - name: Generate artifact attestation
+        # Only generate attestation on push events (when images are actually pushed)
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_AND_NAME }}/${{ matrix.service.name }}
+          subject-digest: ${{ steps.build_image.outputs.digest }} # Correctly referencing the digest output from the build_image step
+          push-to-registry: true
+
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: build-and-push # Depends on the build completing successfully
+    # Removed 'if: github.event_name != 'pull_request'' to run on PRs as well for early feedback
+    
+    strategy:
+      matrix:
+        service: [server, backend, frontend]
+    
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          # Using the branch/tag name as the image tag for scanning
+          image-ref: ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_AND_NAME }}/${{ matrix.service }}:${{ github.ref_name }}
+          format: 'sarif'
+          output: 'trivy-results-${{ matrix.service }}.sarif'
+          # If you want to fail the workflow on critical vulnerabilities, add:
+          # exit-code: '1'
+          # severity: 'CRITICAL,HIGH'
+      
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results-${{ matrix.service }}.sarif'
+
+  integration-test:
+    runs-on: ubuntu-latest
+    needs: build-and-push # Depends on the build completing successfully
+    # Removed 'if: github.event_name != 'pull_request'' to run on PRs as well for early feedback
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Create test environment file
+        run: |
+          cp .env.example .env
+          # This test key is for local testing only. For real API interactions, use GitHub Secrets.
+          echo "OPENAI_API_KEY=test-key" >> .env
+      
+      - name: Pull built images
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_AND_NAME }}/server:${{ github.ref_name }}
+          docker pull ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_AND_NAME }}/backend:${{ github.ref_name }}
+          docker pull ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_AND_NAME }}/frontend:${{ github.ref_name }}
+      
+      - name: Tag images for local testing
+        run: |
+          docker tag ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_AND_NAME }}/server:${{ github.ref_name }} metis-server:latest
+          docker tag ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_AND_NAME }}/backend:${{ github.ref_name }} metis-backend:latest
+          docker tag ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_AND_NAME }}/frontend:${{ github.ref_name }} metis-frontend:latest
+      
+      - name: Start services with docker-compose
+        run: |
+          docker-compose up -d
+      
+      - name: Wait for services to be healthy
+        timeout-minutes: 5 # Set a timeout for waiting for services
+        run: |
+          echo "Waiting for frontend (port 3000)..."
+          for i in $(seq 1 60); do # Wait up to 60 seconds
+            curl -f http://localhost:3000/api/health && break
+            echo -n "."
+            sleep 1
+            if [ $i -eq 60 ]; then
+              echo "Frontend not ready after 60 seconds. Exiting."
+              exit 1
+            fi
+          done
+          echo "Frontend is healthy!"
+
+          echo "Waiting for backend (port 8000)..."
+          for i in $(seq 1 60); do # Wait up to 60 seconds
+            curl -f http://localhost:8000/health && break
+            echo -n "."
+            sleep 1
+            if [ $i -eq 60 ]; then
+              echo "Backend not ready after 60 seconds. Exiting."
+              exit 1
+            fi
+          done
+          echo "Backend is healthy!"
+
+          echo "Waiting for server (port 9999)..."
+          for i in $(seq 1 60); do # Wait up to 60 seconds
+            curl -f http://localhost:9999/health && break
+            echo -n "."
+            sleep 1
+            if [ $i -eq 60 ]; then
+              echo "Server not ready after 60 seconds. Exiting."
+              exit 1
+            fi
+          done
+          echo "Server is healthy!"
+      
+      - name: Test service health endpoints
+        run: |
+          curl -f http://localhost:3000/api/health || exit 1
+          curl -f http://localhost:8000/health || exit 1
+          curl -f http://localhost:9999/health || exit 1
+      
+      - name: Test service connectivity
+        run: |
+          docker-compose exec -T frontend curl -f http://backend:8000/health || exit 1
+          docker-compose exec -T backend curl -f http://server:9999/health || exit 1
+      
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          echo "=== Docker Compose Logs ==="
+          docker-compose logs
+          echo "=== Container Status ==="
+          docker-compose ps
+      
+      - name: Cleanup
+        if: always() # Run cleanup even if previous steps fail
+        run: |
+          docker-compose down -v
+          docker system prune -f
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-and-push, security-scan, integration-test] # Depends on all preceding jobs
+    if: startsWith(github.ref, 'refs/tags/v') # Only run if a tag starting with 'v' is pushed
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Create Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # GITHUB_TOKEN has default permissions to create releases
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          body: |
+            ## Docker Images
+            
+            The following Docker images have been published to GitHub Container Registry:
+            
+            - `${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_AND_NAME }}/server:${{ github.ref_name }}`
+            - `${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_AND_NAME }}/backend:${{ github.ref_name }}`
+            - `${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_AND_NAME }}/frontend:${{ github.ref_name }}`
+            
+            ## Quick Start
+            
+            ```bash
+            # Pull the release
+            git clone [https://github.com/$](https://github.com/$){{ github.repository }}.git
+            cd metis-router
+            git checkout ${{ github.ref_name }}
+            
+            # Configure environment
+            cp .env.example .env
+            # Edit .env with your OPENAI_API_KEY
+            
+            # Start with Docker
+            ./docker-start.sh
+            ```
+            
+            ## Changes
+            
+            See the [CHANGELOG.md](CHANGELOG.md) for detailed changes in this release.
+          draft: false
+          prerelease: false

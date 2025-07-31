@@ -2,6 +2,10 @@ import { getServerByName, getAllServers, DatabaseMCPServer } from './mcp-registr
 import { loadConfig } from './config.js';
 import * as fs from 'fs';
 import * as path from 'path';
+import dotenv from 'dotenv';
+
+// Load environment variables from root .env file
+dotenv.config({ path: path.resolve('../.env') });
 
 // Define AuthRequest interface locally since we removed auth-manager
 export interface AuthRequest {
@@ -16,7 +20,11 @@ declare global {
 }
 
 const CONFIG_PATH = process.env.MCP_CONFIG_PATH || path.resolve('./config.json');
-const MAX_ACTIVE_SERVERS = 3;
+const MAX_ACTIVE_SERVERS = (() => {
+  const envValue = process.env.MAX_ACTIVE_SERVERS;
+  const parsed = parseInt(envValue || '3', 10);
+  return isNaN(parsed) ? 3 : parsed;
+})();
 
 // Helper to read the entire config, ensuring active_mcp_queue exists
 function _readFullConfig(): any {

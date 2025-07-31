@@ -6,7 +6,9 @@ import type { IncomingMessage, ServerResponse } from "http";
 import dotenv from "dotenv";
 import path from "path";
 import fs from "fs/promises";
-dotenv.config();
+
+// Load environment variables from root .env file
+dotenv.config({ path: path.resolve('../.env') });
 
 
 const app = express();
